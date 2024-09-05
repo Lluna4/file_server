@@ -209,7 +209,7 @@ int main()
                     }
                     case 2:
                     {
-                        auto file_ = files_uploading.find(events[i].data.fd);
+                        auto file_ = files_uploading.find(events[i].data.fd, std::ios_base::app);
                         if (file_ == files_uploading.end())
                             break;
                         std::ofstream file_write(file_->second.get_name());
