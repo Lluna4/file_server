@@ -91,11 +91,13 @@ void accept_th(int socket, int pipefd)
     while (true)
     {
         int clientfd = accept(socket, nullptr, nullptr);
-        write(pipefd, &clientfd, sizeof(int));
+        netlib::add_to_list(clientfd, epfd);
+        std::println("Added fd {} to epoll", clientfd);
+        users.emplace(1, user(clientfd));
     }
 }
 
-std::vector<char *> preprocess_pkts(char *buffer, int sz)
+std::vector<char *> preprocess_pkts(char *buffer, int sz, int sock)
 {
         std::vector<char *> ret;
         while (true)
@@ -105,9 +107,19 @@ std::vector<char *> preprocess_pkts(char *buffer, int sz)
             std::tuple<int, int> header;
             constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
             read_comp_pkt(size, buffer, header);
+            //std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
             int size_ = std::get<0>(header);
             if (size_ > sz)
+            {
+                /*char *buf = (char *)calloc(1024, sizeof(char));
+                memcpy(buf, buffer, sz);
+                char *start_buf = buf;
+                buf += sz;
+                int status = recv(sock, buf, 1024 - sz, 0);
+                std::println("status {}", status);
+                buffer = start_buf;*/
                 return ret;
+            }
             buffer -= 8;
             char *new_str = (char *)calloc(size_ + ((sizeof(int) * 2) + 1), sizeof(char));
             std::memcpy(new_str, buffer, size_ + 8);
@@ -139,36 +151,34 @@ int main()
     std::println("Ready");
     while (true)
     {
-        events_ready_internal = epoll_wait(internal_epfd, events_internal, 1024, 10);
-
-        for (int i = 0; i < events_ready_internal;i++)
-        {
-            int fd = 0;
-            read(events_internal[i].data.fd, &fd, sizeof(int));
-            netlib::add_to_list(fd, epfd);
-            std::println("Added fd {} to epoll", fd);
-            users.emplace(1, user(fd));
-        }
-        events_ready = epoll_wait(epfd, events, 1024, 10);
+        events_ready = epoll_wait(epfd, events, 1024, -1);
         for (int i = 0; i < events_ready;i++)
         {
             int status = recv(events[i].data.fd, buffer, 1024, 0);
+            if (status < 1024)
+            {
+                status += recv(events[i].data.fd, &buffer[status], 1024 - status, 0);
+            }
+            //std::println("Status {} {}", status, buffer[0]);
             if (status == -1 || status == 0)
             {
                 netlib::disconnect_server(events[i].data.fd, epfd);
                 users.erase(events[i].data.fd);
                 continue;
             }
-            std::vector<char *> pkts = preprocess_pkts(buffer, 1024);
+            std::vector<char *> pkts = preprocess_pkts(buffer, status, events[i].data.fd);
             if (pkts.empty())
+            {
+                std::println("Empty!");
                 continue;
+            }
             for (auto pkt: pkts)
             {
                 std::tuple<int, int> header;
                 constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
 
                 read_comp_pkt(size, pkt, header);
-                std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
+                
                 std::string test;
                 switch (std::get<1>(header))
                 {
@@ -209,13 +219,13 @@ int main()
                     }
                     case 2:
                     {
-                        auto file_ = files_uploading.find(events[i].data.fd, std::ios_base::app);
+                        auto file_ = files_uploading.find(events[i].data.fd);
                         if (file_ == files_uploading.end())
                             break;
-                        std::ofstream file_write(file_->second.get_name());
+                        std::ofstream file_write(file_->second.get_name(), std::ios_base::app);
                         file_write.write(pkt, std::get<0>(header));
                         file_->second.data_size += std::get<0>(header);
-                        std::println("Added a {}B chunk to the file with data {}", std::get<0>(header), pkt);
+                        //std::println("Added a {}B chunk to the file with data {}", std::get<0>(header), pkt);
                         break;
                     }
                     case 3:
@@ -227,7 +237,9 @@ int main()
                         files_uploading.erase(events[i].data.fd);
                         break;
                 }
+                
             }
+            memset(buffer, 0, 1024);
         }
     }
     free(buffer);
