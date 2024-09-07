@@ -16,7 +16,7 @@
 #include <iostream>
 #include "netlib.h"
 #include "comp_time_read.hpp"
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 
 int internal_epfd = 0;
 int epfd = 0;
@@ -135,7 +135,7 @@ int main()
     int sockfd = netlib::init_server("127.0.0.1", 8000);
     if (sockfd == -1)
         return -1;
-    char *buffer = static_cast<char *>(malloc(1024 * sizeof(char *)));
+    char *buffer = static_cast<char *>(malloc(BUFFER_SIZE * sizeof(char *)));
     internal_epfd = epoll_create1(0);
     epfd = epoll_create1(0);
     pipe(pipefds);
@@ -154,10 +154,10 @@ int main()
         events_ready = epoll_wait(epfd, events, 1024, -1);
         for (int i = 0; i < events_ready;i++)
         {
-            int status = recv(events[i].data.fd, buffer, 1024, 0);
-            if (status < 1024)
+            int status = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0);
+            if (status < BUFFER_SIZE)
             {
-                status += recv(events[i].data.fd, &buffer[status], 1024 - status, 0);
+                status += recv(events[i].data.fd, &buffer[status], BUFFER_SIZE - status, 0);
             }
             //std::println("Status {} {}", status, buffer[0]);
             if (status == -1 || status == 0)
@@ -196,12 +196,12 @@ int main()
                             test.push_back(';');
                         }
                         std::println("{}", test);
-                        send(events[i].data.fd, test.c_str(), 1024, 0);
+                        send(events[i].data.fd, test.c_str(), BUFFER_SIZE, 0);
                         break;
                     }
                     case 1:
                     {
-                        std::tuple<array_with_size<1012, char *>, int> name;
+                        std::tuple<array_with_size<BUFFER_SIZE, char *>, int> name;
                         constexpr std::size_t size_ = std::tuple_size_v<decltype(name)>;
                         read_comp_pkt(size_, pkt, name);
                         std::println("Received file name {} and size {}", std::get<0>(name).array, std::get<1>(name));
@@ -239,7 +239,7 @@ int main()
                 }
                 
             }
-            memset(buffer, 0, 1024);
+            memset(buffer, 0, BUFFER_SIZE);
         }
     }
     free(buffer);
