@@ -107,18 +107,23 @@ std::vector<char *> preprocess_pkts(char *buffer, int sz, int sock)
             std::tuple<int, int> header;
             constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
             read_comp_pkt(size, buffer, header);
-            //std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
+            std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
+            if (std::get<0>(header) <= 0 || std::get<0>(header) > BUFFER_SIZE)
+            {
+                std::println("Invalid packet!!");
+                return ret;
+            }
             int size_ = std::get<0>(header);
             if (size_ > sz)
             {
-                /*char *buf = (char *)calloc(1024, sizeof(char));
+                char *buf = (char *)calloc(BUFFER_SIZE, sizeof(char));
                 memcpy(buf, buffer, sz);
                 char *start_buf = buf;
                 buf += sz;
-                int status = recv(sock, buf, 1024 - sz, 0);
+                int status = recv(sock, buf, BUFFER_SIZE - sz, 0);
                 std::println("status {}", status);
-                buffer = start_buf;*/
-                return ret;
+                buffer = start_buf;
+                //return ret;
             }
             buffer -= 8;
             char *new_str = (char *)calloc(size_ + ((sizeof(int) * 2) + 1), sizeof(char));
@@ -155,10 +160,10 @@ int main()
         for (int i = 0; i < events_ready;i++)
         {
             int status = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0);
-            if (status < BUFFER_SIZE)
+            /*if (status < BUFFER_SIZE)
             {
                 status += recv(events[i].data.fd, &buffer[status], BUFFER_SIZE - status, 0);
-            }
+            }*/
             //std::println("Status {} {}", status, buffer[0]);
             if (status == -1 || status == 0)
             {
@@ -166,7 +171,7 @@ int main()
                 users.erase(events[i].data.fd);
                 continue;
             }
-            std::vector<char *> pkts = preprocess_pkts(buffer, status, events[i].data.fd);
+            std::vector<char *> pkts = preprocess_pkts(buffer, status - 8, events[i].data.fd);
             if (pkts.empty())
             {
                 std::println("Empty!");
