@@ -102,6 +102,8 @@ std::vector<char *> preprocess_pkts(char *buffer, int sz, int sock)
         std::vector<char *> ret;
         while (true)
         {
+            if (sz <= 0)
+                return ret;
             if (*buffer == '\0')
                 return ret;
             std::tuple<int, int> header;
@@ -116,14 +118,14 @@ std::vector<char *> preprocess_pkts(char *buffer, int sz, int sock)
             int size_ = std::get<0>(header);
             if (size_ > sz)
             {
-                char *buf = (char *)calloc(BUFFER_SIZE, sizeof(char));
+                /*char *buf = (char *)calloc(BUFFER_SIZE, sizeof(char));
                 memcpy(buf, buffer, sz);
                 char *start_buf = buf;
                 buf += sz;
                 int status = recv(sock, buf, BUFFER_SIZE - sz, 0);
-                std::println("status {}", status);
-                buffer = start_buf;
-                //return ret;
+                std::println("status {} {}", status, sz);
+                buffer = start_buf;*/
+                return ret;
             }
             buffer -= 8;
             char *new_str = (char *)calloc(size_ + ((sizeof(int) * 2) + 1), sizeof(char));
@@ -160,10 +162,10 @@ int main()
         for (int i = 0; i < events_ready;i++)
         {
             int status = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0);
-            /*if (status < BUFFER_SIZE)
+            if (status < BUFFER_SIZE)
             {
                 status += recv(events[i].data.fd, &buffer[status], BUFFER_SIZE - status, 0);
-            }*/
+            }
             //std::println("Status {} {}", status, buffer[0]);
             if (status == -1 || status == 0)
             {
