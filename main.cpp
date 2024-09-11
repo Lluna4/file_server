@@ -97,49 +97,45 @@ void accept_th(int socket, int pipefd)
     }
 }
 
-std::vector<char *> preprocess_pkts(char *buffer, int sz, int sock)
+std::vector<char *> preprocess_pkts(char *buffer, ssize_t sz, int sock)
 {
         std::vector<char *> ret;
-        while (true)
+        if (*buffer == '\0')
         {
-            if (sz <= 0)
-                return ret;
-            if (*buffer == '\0')
-                return ret;
-            std::tuple<int, int> header;
-            constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
-            read_comp_pkt(size, buffer, header);
-            std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
-            if (std::get<0>(header) <= 0 || std::get<0>(header) > BUFFER_SIZE)
-            {
-                std::println("Invalid packet!!");
-                return ret;
-            }
-            int size_ = std::get<0>(header);
-            if (size_ > sz)
-            {
-                /*char *buf = (char *)calloc(BUFFER_SIZE, sizeof(char));
-                memcpy(buf, buffer, sz);
-                char *start_buf = buf;
-                buf += sz;
-                int status = recv(sock, buf, BUFFER_SIZE - sz, 0);
-                std::println("status {} {}", status, sz);
-                buffer = start_buf;*/
-                return ret;
-            }
-            buffer -= 8;
-            char *new_str = (char *)calloc(size_ + ((sizeof(int) * 2) + 1), sizeof(char));
-            std::memcpy(new_str, buffer, size_ + 8);
-            ret.push_back(new_str);
-            buffer += size_ + 8;
-            sz -= size_ + 8;
+            std::println("buffer starts null");
+            return ret;
         }
+        char *start_buffer = buffer;
+        std::tuple<int, int> header;
+        constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
+        read_comp_pkt(size, buffer, header);
+        std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
+        buffer = start_buffer;
+        if (std::get<0>(header) <= 0 || std::get<0>(header) > BUFFER_SIZE)
+        {
+            std::println("Invalid packet!!");
+            return ret;
+        }
+        int size_ = std::get<0>(header);
+        while (size_ > sz)
+        {
+            ssize_t status = recv(sock, &buffer[sz], size_ - sz, 0);
+            std::println("status {} {}", status, sz);
+            sz += status;
+            //return ret;
+        }
+        char *new_str = (char *)calloc(BUFFER_SIZE, sizeof(char));
+        std::memcpy(new_str, buffer, size_ + 8);
+        ret.push_back(new_str);
+        buffer += size_ + 8;
+        sz -= size_ + 8;
+        return ret;
 }
 
 int main()
 {
     int pipefds[2];
-    int sockfd = netlib::init_server("127.0.0.1", 8000);
+    int sockfd = netlib::init_server("0.0.0.0", 8000);
     if (sockfd == -1)
         return -1;
     char *buffer = static_cast<char *>(malloc(BUFFER_SIZE * sizeof(char *)));
@@ -161,17 +157,17 @@ int main()
         events_ready = epoll_wait(epfd, events, 1024, -1);
         for (int i = 0; i < events_ready;i++)
         {
-            int status = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0);
-            if (status < BUFFER_SIZE)
-            {
-                status += recv(events[i].data.fd, &buffer[status], BUFFER_SIZE - status, 0);
-            }
+            ssize_t status = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0);
             //std::println("Status {} {}", status, buffer[0]);
             if (status == -1 || status == 0)
             {
                 netlib::disconnect_server(events[i].data.fd, epfd);
                 users.erase(events[i].data.fd);
                 continue;
+            }
+            while (status < 8)
+            {
+                status += recv(events[i].data.fd, &buffer[status], BUFFER_SIZE - status, 0);
             }
             std::vector<char *> pkts = preprocess_pkts(buffer, status - 8, events[i].data.fd);
             if (pkts.empty())
