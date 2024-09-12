@@ -117,9 +117,13 @@ std::vector<char *> preprocess_pkts(char *buffer, ssize_t sz, int sock)
             return ret;
         }
         int size_ = std::get<0>(header);
+        if (size_ > BUFFER_SIZE)
+        {
+            buffer = (char *)realloc(buffer, size_ + 9);
+        }
         while (size_ > sz)
         {
-            ssize_t status = recv(sock, &buffer[sz], size_ - sz, 0);
+            ssize_t status = recv(sock, &buffer[sz - 8], size_ - sz, 0);
             std::println("status {} {}", status, sz);
             sz += status;
             //return ret;
