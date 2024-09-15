@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <map>
 #include <iostream>
+#include <sys/sendfile.h>
 #include "netlib.h"
 #include "comp_time_read.hpp"
 #define BUFFER_SIZE 4096
@@ -27,6 +28,13 @@ enum STATUS
     START,
     FILE_NAME_GIVEN,
     FILE_SENT
+};
+
+struct packet
+{
+    int size;
+    int id;
+    char *data;
 };
 
 class user
@@ -97,43 +105,44 @@ void accept_th(int socket, int pipefd)
     }
 }
 
-std::vector<char *> preprocess_pkts(char *buffer, ssize_t sz, int sock)
+std::vector<packet> preprocess_pkts(char *buffer, ssize_t sz, int sock)
 {
-        std::vector<char *> ret;
+    std::vector<packet> ret;
+    char *start_buffer =  buffer;
+    int size_ = BUFFER_SIZE;
+
+    while (true)
+    {
+        if (sz < 8 || size_ < 8)
+            break;
         if (*buffer == '\0')
-        {
-            std::println("buffer starts null");
-            return ret;
-        }
-        char *start_buffer = buffer;
+            break;
         std::tuple<int, int> header;
         constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
+
         read_comp_pkt(size, buffer, header);
-        std::println("header {}, {} ", std::get<0>(header), std::get<1>(header));
-        buffer = start_buffer;
-        if (std::get<0>(header) <= 0 || std::get<0>(header) > BUFFER_SIZE)
+
+        while (std::get<0>(header) > sz)
         {
-            std::println("Invalid packet!!");
-            return ret;
-        }
-        int size_ = std::get<0>(header);
-        if (size_ > BUFFER_SIZE)
-        {
-            buffer = (char *)realloc(buffer, size_ + 9);
-        }
-        while (size_ > sz)
-        {
-            ssize_t status = recv(sock, &buffer[sz - 8], size_ - sz, 0);
-            std::println("status {} {}", status, sz);
+            std::println("Rebuilt packet");
+            if (size_ < std::get<0>(header))
+            {
+                break;
+            }
+            int status = recv(sock, &buffer[sz], std::get<0>(header) - sz, 0);
+
             sz += status;
-            //return ret;
         }
-        char *new_str = (char *)calloc(BUFFER_SIZE, sizeof(char));
-        std::memcpy(new_str, buffer, size_ + 8);
-        ret.push_back(new_str);
-        buffer += size_ + 8;
-        sz -= size_ + 8;
-        return ret;
+
+        char *data = (char *)calloc(std::get<0>(header), sizeof(char));
+        std::memcpy(data, buffer, std::get<0>(header));
+        ret.emplace_back(std::get<0>(header), std::get<1>(header), data);
+        sz -= std::get<0>(header);
+        size_ -= std::get<0>(header);
+        buffer += std::get<0>(header);
+    }
+    std::println("Created {} packets", ret.size());
+    return ret;
 }
 
 int main()
@@ -173,21 +182,17 @@ int main()
             {
                 status += recv(events[i].data.fd, &buffer[status], BUFFER_SIZE - status, 0);
             }
-            std::vector<char *> pkts = preprocess_pkts(buffer, status - 8, events[i].data.fd);
+            std::vector<packet> pkts = preprocess_pkts(buffer, status, events[i].data.fd);
             if (pkts.empty())
             {
                 std::println("Empty!");
                 continue;
             }
-            for (auto pkt: pkts)
+            for (auto pk: pkts)
             {
-                std::tuple<int, int> header;
-                constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
-
-                read_comp_pkt(size, pkt, header);
-                
+                char *pkt = pk.data;
                 std::string test;
-                switch (std::get<1>(header))
+                switch (pk.id)
                 {
                     case -1:
                     {
@@ -200,15 +205,17 @@ int main()
                         for (auto& value: files)
                         {
                             test.append(value.second.get_name());
-                            test.push_back(';');
+                            test.push_back(',');
+                            test.append(std::to_string(value.second.data_size/1000000));
+                            test.append(" MB;");
                         }
                         std::println("{}", test);
-                        send(events[i].data.fd, test.c_str(), BUFFER_SIZE, 0);
+                        send(events[i].data.fd, test.c_str(), 1024, 0);
                         break;
                     }
                     case 1:
                     {
-                        std::tuple<array_with_size<BUFFER_SIZE, char *>, int> name;
+                        std::tuple<array_with_size<BUFFER_SIZE - 12, char *>, int> name;
                         constexpr std::size_t size_ = std::tuple_size_v<decltype(name)>;
                         read_comp_pkt(size_, pkt, name);
                         std::println("Received file name {} and size {}", std::get<0>(name).array, std::get<1>(name));
@@ -230,12 +237,13 @@ int main()
                         if (file_ == files_uploading.end())
                             break;
                         std::ofstream file_write(file_->second.get_name(), std::ios_base::app);
-                        file_write.write(pkt, std::get<0>(header));
-                        file_->second.data_size += std::get<0>(header);
+                        file_write.write(pkt, pk.size);
+                        file_->second.data_size += pk.size;
                         //std::println("Added a {}B chunk to the file with data {}", std::get<0>(header), pkt);
                         break;
                     }
                     case 3:
+                    {
                         auto file_ = files_uploading.find(events[i].data.fd);
                         if (file_ == files_uploading.end())
                             break;
@@ -243,6 +251,18 @@ int main()
                         std::println("Created file {} with size {}B", file_->second.get_name(), file_->second.data_size);;
                         files_uploading.erase(events[i].data.fd);
                         break;
+                    }
+                    case 4:
+                        std::tuple<array_with_size<BUFFER_SIZE, char *>> file_picked;
+                        constexpr std::size_t size_picked = std::tuple_size_v<decltype(file_picked)>;
+                        read_comp_pkt(size_picked, pkt, file_picked);
+                        auto file_ = files.find(std::get<0>(file_picked).array);
+                        if (file_ == files.end())
+                            break;
+                        int filefd = open(file_->second.get_name().c_str(), O_RDONLY);
+                        std::println("Fd: {}, file got {}", filefd, std::get<0>(file_picked).array);
+                        sendfile(events[i].data.fd, filefd, 0, file_->second.data_size);
+                        close(filefd);
                 }
                 
             }
