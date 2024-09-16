@@ -121,16 +121,19 @@ std::vector<packet> preprocess_pkts(char *buffer, ssize_t sz, int sock)
         constexpr std::size_t size = std::tuple_size_v<decltype(header)>;
 
         read_comp_pkt(size, buffer, header);
+        std::println("Header {} {}", std::get<0>(header), std::get<1>(header));
+        if (std::get<0>(header) > BUFFER_SIZE || std::get<0>(header) <= 0)
+            break;
 
         while (std::get<0>(header) > sz)
         {
-            std::println("Rebuilt packet");
+            
             if (size_ < std::get<0>(header))
             {
                 break;
             }
-            int status = recv(sock, &buffer[sz], std::get<0>(header) - sz, 0);
-
+            int status = recv(sock, &buffer[sz - 8], (std::get<0>(header) - sz) + 8, 0);
+            std::println("Rebuilt packet {} {} {}", std::get<0>(header), sz, status);
             sz += status;
         }
 
@@ -147,17 +150,14 @@ std::vector<packet> preprocess_pkts(char *buffer, ssize_t sz, int sock)
 
 int main()
 {
-    int pipefds[2];
     int sockfd = netlib::init_server("0.0.0.0", 8000);
     if (sockfd == -1)
         return -1;
     char *buffer = static_cast<char *>(malloc(BUFFER_SIZE * sizeof(char *)));
     internal_epfd = epoll_create1(0);
     epfd = epoll_create1(0);
-    pipe(pipefds);
-    std::thread a(accept_th, sockfd, pipefds[1]);
+    std::thread a(accept_th, sockfd, 0);
     a.detach();
-    netlib::add_to_list(pipefds[0], internal_epfd);
 
     int events_ready_internal = 0;
     epoll_event events_internal[1024];
@@ -259,10 +259,13 @@ int main()
                         auto file_ = files.find(std::get<0>(file_picked).array);
                         if (file_ == files.end())
                             break;
-                        int filefd = open(file_->second.get_name().c_str(), O_RDONLY);
-                        std::println("Fd: {}, file got {}", filefd, std::get<0>(file_picked).array);
-                        sendfile(events[i].data.fd, filefd, 0, file_->second.data_size);
-                        close(filefd);
+                        int fd = open(file_->second.get_name().c_str(), O_RDONLY);
+                        off_t file_size = lseek(fd, 0, SEEK_END);
+                        lseek(fd, 0, SEEK_SET);
+                        std::println("Fd: {}, file got {}", fd, std::get<0>(file_picked).array);
+                        std::println("{}", file_->second.data_size);
+                        sendfile(events[i].data.fd, fd, 0, file_size);
+                        close(fd);
                 }
                 
             }
